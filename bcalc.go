@@ -194,6 +194,7 @@ func (t *toks) conv() num {
 			fail("cannot convert unitless number to", u)
 		}
 
+		v.val *= bits(v.unit)/bits(u)
 		v.unit = u
 	}
 
