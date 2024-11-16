@@ -12,7 +12,7 @@ func main() {
 	t := toks{}
 
 	for _, s := range ss {
-		t = append(t, tok{s: s, t: 0})
+		t = append(t, tok{s: s})
 	}
 
 	v := t.exp()
@@ -30,22 +30,17 @@ func fail(msg ...any) {
 	os.Exit(1)
 }
 
-
-
 type num struct {
-	v float64
-	u string
+	val  float64
+	unit string
 }
 
 func (n num) String() string {
-	return fmt.Sprint(n.v) + n.u
+	return strconv.FormatFloat(n.val, 'f', -1, 64) + strings.ReplaceAll(strings.ToUpper(n.unit), "I", "i")
 }
-
-
 
 type tok struct {
 	s string
-	t rune // o, (, ), n
 }
 
 type toks []tok
@@ -54,8 +49,8 @@ func (t *toks) end() bool {
 	return len(*t) == 0
 }
 
-func (t *toks) head() tok {
-	return (*t)[0]
+func (t *toks) head() string {
+	return (*t)[0].s
 }
 
 func (t *toks) step() {
@@ -67,8 +62,6 @@ func (t *toks) expect(s string) {
 		fail("unexpected end of input - expected", s)
 	}
 }
-
-
 
 /*
 
@@ -93,7 +86,7 @@ func (t *toks) exp() num {
 	n := 0
 	var vs []num
 	var os []string
-	for !t.end() && t.head().s != ")" {
+	for !t.end() && t.head() != ")" {
 		o := t.op()
 		v := t.conv()
 
@@ -130,49 +123,43 @@ func (t *toks) exp() num {
 		o := os[i]
 		u := vs[i]
 
+		m := bits(u.unit) / bits(v.unit)
+
 		switch o {
 		case "+":
-			if (v.u == "") != (u.u == "") {
+			if (v.unit == "") != (u.unit == "") {
 				fail("cannot add values with and without units -", u)
 			}
 
-			if v.u == u.u {
-				v.v += u.v
-				continue
-			}
-
-			fail("add not implemented")
+			v.val += u.val * m
 
 		case "-":
-			if (v.u == "") != (u.u == "") {
+			if (v.unit == "") != (u.unit == "") {
 				fail("cannot subtract values with and without units")
 			}
 
-			if v.u == u.u {
-				v.v -= u.v
-				continue
-			}
-
-			fail("subtract not implemented")
+			v.val -= u.val * m
 
 		case "x", "*":
-			if v.u != "" && u.u != "" {
+			if v.unit != "" && u.unit != "" {
 				fail("cannot multiply two byte units")
 			}
 
-			v.v *= u.v
-			if v.u == "" {
-				v.u = u.u
+			v.val *= u.val
+			if v.unit == "" {
+				v.unit = u.unit
 			}
 
 		case "/":
-			if v.u == "" && u.u != "" {
+			if v.unit == "" && u.unit != "" {
 				fail("cannot divide a unitless number")
 			}
 
-			v.v /= u.v
-			if v.u == u.u {
-				v.u = ""
+			v.val /= u.val
+
+			if u.unit != "" {
+				v.unit = ""
+				v.val /= m
 			}
 		}
 	}
@@ -180,20 +167,34 @@ func (t *toks) exp() num {
 	return v
 }
 
+func (t *toks) op() string {
+	t.expect("an operator")
+
+	x := t.head()
+	switch x {
+	case "+", "-", "x", "*", "/":
+	default:
+		fail("unexpected token", x, "- expected operator")
+	}
+
+	t.step()
+	return x
+}
+
 func (t *toks) conv() num {
 	t.expect("an expression")
 
 	v := t.val()
 
-	if !t.end() && t.head().s == "in" {
+	if !t.end() && t.head() == "in" {
 		t.step()
-		u := t.unit()
 
-		if v.u == "" {
+		u := t.unit()
+		if v.unit == "" {
 			fail("cannot convert unitless number to", u)
 		}
 
-		v.u = u
+		v.unit = u
 	}
 
 	return v
@@ -203,7 +204,7 @@ func (t *toks) val() num {
 	t.expect("an open bracket or a number")
 
 	x := t.head()
-	if x.s != "(" {
+	if x != "(" {
 		return t.lit()
 	}
 
@@ -217,35 +218,90 @@ func (t *toks) val() num {
 func (t *toks) lit() num {
 	t.expect("a number")
 
-	n := num{v: t.num()}
+	n := num{val: t.num()}
 
 	if t.isUnit() {
-		n.u = t.unit()
+		n.unit = t.unit()
 	}
 
 	return n
 }
 
-func (t *toks) op() string {
-	t.expect("an operator")
+func (t *toks) num() float64 {
+	t.expect("a number")
 
 	x := t.head()
-	switch x.s {
-	case "+", "-", "x", "*", "/":
-	default:
-		fail("unexpected token", x.s, "- expected operator")
+
+	v, err := strconv.ParseFloat(x, 64)
+	if err != nil {
+		fail("unexpected token", x, "- expected a number")
 	}
 
 	t.step()
-	return x.s
+	return v
+}
+
+func (t *toks) unit() string {
+	t.expect("a unit")
+
+	x := t.head()
+	if !t.isUnit() {
+		fail("unexpected token", x, "- expected a unit")
+	}
+
+	t.step()
+	return x
+}
+
+func (t *toks) isUnit() bool {
+	if t.end() {
+		return false
+	}
+
+	x := t.head()
+	u := strings.ToLower(x)
+	switch u {
+	case "b", "kb", "kib", "mb", "mib", "gb", "gib", "tb", "tib", "pb", "pib":
+		return true
+	}
+
+	return false
+}
+
+func bits(s string) float64 {
+	switch s {
+	case "b":
+		return 1
+	case "kb":
+		return 1_000
+	case "kib":
+		return 1024
+	case "mb":
+		return 1_000_000
+	case "mib":
+		return 1024 * 1024
+	case "gb":
+		return 1_000_000_000
+	case "gib":
+		return 1024 * 1024 * 1024
+	case "tb":
+		return 1_000_000_000_000
+	case "tib":
+		return 1024 * 1024 * 1024 * 1024
+	case "pb":
+		return 1_000_000_000_000_000
+	case "pib":
+		return 1024 * 1024 * 1024 * 1024 * 1024
+	}
+	return 1
 }
 
 func (t *toks) open() {
 	t.expect("an opening bracket")
 
 	x := t.head()
-	if x.s != "(" {
-		fail("unexpected token", x.s, "- expected open bracket")
+	if x != "(" {
+		fail("unexpected token", x, "- expected open bracket")
 	}
 
 	t.step()
@@ -255,50 +311,9 @@ func (t *toks) close() {
 	t.expect("a closing bracket")
 
 	x := t.head()
-	if x.s != ")" {
-		fail("unexpected token", x.s, "- expected close bracket")
+	if x != ")" {
+		fail("unexpected token", x, "- expected close bracket")
 	}
 
 	t.step()
-}
-
-func (t *toks) num() float64 {
-	t.expect("a number")
-
-	x := t.head()
-
-	v, err := strconv.ParseFloat(x.s, 64)
-	if err != nil {
-		fail("unexpected token", x.s, "- expected a number")
-	}
-
-	t.step()
-	return v
-}
-
-func (t *toks) isUnit() bool {
-	if t.end() {
-		return false
-	}
-
-	x := t.head()
-	u := strings.ToLower(x.s)
-	switch u {
-	case "b", "kb", "kib", "mb", "mib", "gb", "gib", "tb", "tib", "pb", "pib":
-		return true
-	}
-
-	return false
-}
-
-func (t *toks) unit() string {
-	t.expect("a unit")
-	
-	x := t.head()
-	if !t.isUnit() {
-		fail("unexpected token", x.s, "- expected a unit")
-	}
-
-	t.step()
-	return strings.ReplaceAll(strings.ToUpper(x.s), "I", "i")
 }
