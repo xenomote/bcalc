@@ -5,53 +5,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"unicode"
-
 )
-
-type tok struct {
-	s string
-	t rune // o, (, ), n
-}
-
-type num struct {
-	v float64
-	u rune
-}
-
-func (n num) String() string {
-	s := fmt.Sprint(n.v)
-	x := ""
-	switch n.u {		
-	case 'b':
-		x = "B"
-	case 'k':
-		x = "KB"
-	case 'm':
-		x = "MB"
-	case 'g':
-		x = "GB"
-	case 't':
-		x = "TB"
-	case 'p':
-		x = "PB"
-	}
-	return s+x
-}
-
-/*
-
-U := ([kKmMgGtTpP][iI]?)?[bB]
-N := [+-]?[0-9]+(\.[0-9]+([eE][+-]?[0-9]+(\.[0-9]+)?)?)?
-V := N U?
-C := V (in U)?
-E := C ([/*+-] C)*
-
-*/
 
 func main() {
 	ss := strings.Fields(strings.Join(os.Args[1:], " "))
-
 	t := toks{}
 
 	for _, s := range ss {
@@ -63,7 +20,35 @@ func main() {
 	pass(v.String())
 }
 
-type toks []tok 
+func pass(msg ...any) {
+	fmt.Println(msg...)
+	os.Exit(0)
+}
+
+func fail(msg ...any) {
+	fmt.Println(msg...)
+	os.Exit(1)
+}
+
+
+
+type num struct {
+	v float64
+	u string
+}
+
+func (n num) String() string {
+	return fmt.Sprint(n.v) + n.u
+}
+
+
+
+type tok struct {
+	s string
+	t rune // o, (, ), n
+}
+
+type toks []tok
 
 func (t *toks) end() bool {
 	return len(*t) == 0
@@ -77,21 +62,67 @@ func (t *toks) step() {
 	*t = (*t)[1:]
 }
 
+func (t *toks) expect(s string) {
+	if t.end() {
+		fail("unexpected end of input - expected", s)
+	}
+}
 
+
+
+/*
+
+E := C ([/*+-] C)*
+C := V (in U)?
+V := Q | \( E \)
+Q := N U?
+N := [+-]?[0-9]+(\.[0-9]+([eE][+-]?[0-9]+(\.[0-9]+)?)?)?
+U := ([kKmMgGtTpP][iI]?)?[bB]
+
+*/
 
 func (t *toks) exp() num {
-	if t.end() {
-		fail("unexpected end of input")
-	}
+	t.expect("an expression")
 
-	v := t.val()
+	v := t.conv()
+
+	addsub := false
+	mul := false
+	div := false
 
 	n := 0
 	var vs []num
 	var os []string
 	for !t.end() && t.head().s != ")" {
-		os = append(os, t.op())
-		vs = append(vs, t.val())
+		o := t.op()
+		v := t.conv()
+
+		if div {
+			fail("ambiguous division - add parentheses")
+		}
+
+		switch o {
+		case "/":
+			if addsub || mul {
+				fail("ambiguous division - add parentheses")
+			}
+			div = true
+
+		case "*", "x":
+			if addsub {
+				fail("ambiguous multiplication - add parentheses")
+			}
+			mul = true
+
+		case "+", "-":
+			if mul {
+				fail("ambiguous addition/subtraction - add parentheses")
+			}
+			addsub = true
+		}
+
+		os = append(os, o)
+		vs = append(vs, v)
 		n++
 	}
 
@@ -101,7 +132,7 @@ func (t *toks) exp() num {
 
 		switch o {
 		case "+":
-			if (v.u == 0) != (u.u == 0) {
+			if (v.u == "") != (u.u == "") {
 				fail("cannot add values with and without units -", u)
 			}
 
@@ -113,7 +144,7 @@ func (t *toks) exp() num {
 			fail("add not implemented")
 
 		case "-":
-			if (v.u == 0) != (u.u == 0) {
+			if (v.u == "") != (u.u == "") {
 				fail("cannot subtract values with and without units")
 			}
 
@@ -125,23 +156,23 @@ func (t *toks) exp() num {
 			fail("subtract not implemented")
 
 		case "x", "*":
-			if v.u != 0 && u.u != 0 {
+			if v.u != "" && u.u != "" {
 				fail("cannot multiply two byte units")
 			}
-			
+
 			v.v *= u.v
-			if v.u == 0 {
+			if v.u == "" {
 				v.u = u.u
 			}
 
 		case "/":
-			if v.u == 0 && u.u != 0 {
+			if v.u == "" && u.u != "" {
 				fail("cannot divide a unitless number")
 			}
-			
+
 			v.v /= u.v
 			if v.u == u.u {
-				v.u = 0
+				v.u = ""
 			}
 		}
 	}
@@ -149,10 +180,31 @@ func (t *toks) exp() num {
 	return v
 }
 
+func (t *toks) conv() num {
+	t.expect("an expression")
+
+	v := t.val()
+
+	if !t.end() && t.head().s == "in" {
+		t.step()
+		u := t.unit()
+
+		if v.u == "" {
+			fail("cannot convert unitless number to", u)
+		}
+
+		v.u = u
+	}
+
+	return v
+}
+
 func (t *toks) val() num {
+	t.expect("an open bracket or a number")
+
 	x := t.head()
 	if x.s != "(" {
-		return t.num()
+		return t.lit()
 	}
 
 	t.open()
@@ -162,17 +214,24 @@ func (t *toks) val() num {
 	return v
 }
 
-func (t *toks) op() string {
-	if t.end() {
-		fail("unexpected end of input - expected operator")
+func (t *toks) lit() num {
+	t.expect("a number")
+
+	n := num{v: t.num()}
+
+	if t.isUnit() {
+		n.u = t.unit()
 	}
+
+	return n
+}
+
+func (t *toks) op() string {
+	t.expect("an operator")
 
 	x := t.head()
 	switch x.s {
-	case "+":
-	case "-":
-	case "x", "*":
-	case "/":
+	case "+", "-", "x", "*", "/":
 	default:
 		fail("unexpected token", x.s, "- expected operator")
 	}
@@ -182,9 +241,7 @@ func (t *toks) op() string {
 }
 
 func (t *toks) open() {
-	if t.end() {
-		fail("unexpected end of input - expected open bracket")
-	}
+	t.expect("an opening bracket")
 
 	x := t.head()
 	if x.s != "(" {
@@ -195,9 +252,7 @@ func (t *toks) open() {
 }
 
 func (t *toks) close() {
-	if t.end() {
-		fail("unexpected end of input - expected close bracket")
-	}
+	t.expect("a closing bracket")
 
 	x := t.head()
 	if x.s != ")" {
@@ -207,68 +262,43 @@ func (t *toks) close() {
 	t.step()
 }
 
-func (t *toks) num() num {
-	if t.end() {
-		fail("unexpected end of input, expected number")
-	}
+func (t *toks) num() float64 {
+	t.expect("a number")
 
 	x := t.head()
 
-	cs := []rune(x.s)
-	i := len(cs)
-	for ; i >= 0; i-- {
-		if !unicode.IsLetter(cs[i - 1]) {
-			break
-		}
-	}
-
-	value, unit := string(cs[:i]), string(cs[i:])
-
-	v, err := strconv.ParseFloat(value, 64)
+	v, err := strconv.ParseFloat(x.s, 64)
 	if err != nil {
-		fail(err.Error())
-	}
-
-	u := rune(0)
-	switch strings.ToLower(unit) {
-	case "":
-	case "b":
-		u = 'b'
-	case "kb":
-		u = 'k'
-	case "kib":
-		u = 'K'
-	case "mb": 
-		u = 'm'
-	case "mib":
-		u = 'M'
-	case "gb":
-		u = 'g'
-	case "gib":
-		u = 'G'
-	case "tb":
-		u = 't'
-	case "tib":
-		u = 'T'
-	case "pb":
-		u = 'p'
-	case "pib":
-		u = 'P'
-	default:
-		fail("unknown unit", unit)
+		fail("unexpected token", x.s, "- expected a number")
 	}
 
 	t.step()
-
-	return num{v: v, u: u}
+	return v
 }
 
-func pass(msg... any) {
-	fmt.Println(msg...)
-	os.Exit(0)
+func (t *toks) isUnit() bool {
+	if t.end() {
+		return false
+	}
+
+	x := t.head()
+	u := strings.ToLower(x.s)
+	switch u {
+	case "b", "kb", "kib", "mb", "mib", "gb", "gib", "tb", "tib", "pb", "pib":
+		return true
+	}
+
+	return false
 }
 
-func fail(msg... any){
-	fmt.Println(msg...)
-	os.Exit(1)
+func (t *toks) unit() string {
+	t.expect("a unit")
+	
+	x := t.head()
+	if !t.isUnit() {
+		fail("unexpected token", x.s, "- expected a unit")
+	}
+
+	t.step()
+	return strings.ReplaceAll(strings.ToUpper(x.s), "I", "i")
 }
