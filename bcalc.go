@@ -3,20 +3,20 @@ package main
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func main() {
-	ss := strings.Fields(strings.Join(os.Args[1:], " "))
-	t := toks{}
-
-	for _, s := range ss {
-		t = append(t, tok{s: s})
-	}
+	t := toks{buff: []rune(strings.Join(os.Args[1:], " "))}
+	t.next() // load first token
 
 	v := t.exp()
-
+	if !t.isEnd() {
+		fail("malformed, couldn't parse " + t.dump())
+	}
 	pass(v.String())
 }
 
@@ -39,28 +39,77 @@ func (n num) String() string {
 	return strconv.FormatFloat(n.val, 'f', -1, 64) + strings.ReplaceAll(strings.ToUpper(n.unit), "I", "i")
 }
 
-type tok struct {
-	s string
+type toks struct {
+	text string
+	buff []rune
 }
 
-type toks []tok
-
-func (t *toks) end() bool {
-	return len(*t) == 0
+func (t *toks) isEnd() bool {
+	return len(t.text) == 0
 }
 
 func (t *toks) head() string {
-	return (*t)[0].s
+	return t.text
 }
 
-func (t *toks) step() {
-	*t = (*t)[1:]
-}
+func (t *toks) next() {
+	i := 0
+	j := 0
+	a := func() rune { return t.buff[i] }
+	b := func() rune { return t.buff[j] }
+	ok := func() bool { return j < len(t.buff) }
 
-func (t *toks) expect(s string) {
-	if t.end() {
-		fail("unexpected end of input - expected", s)
+	for i < len(t.buff) && unicode.IsSpace(a()) {
+		i++
 	}
+	if i > len(t.buff)-1 {
+		t.text = ""
+		t.buff = nil
+		return
+	}
+
+	j = i + 1
+
+	if slices.Contains([]rune("()+-*x/"), a()) {
+
+	} else if unicode.IsDigit(a()) {
+		e := false
+		for ; ok(); j++ {
+			b := b()
+
+			// e notation is allowed
+			if b == 'e' || b == 'E' {
+				e = true
+				continue
+			}
+
+			// plus and minus must be preceeded by e 
+			if (b == '+' || b == '-') && e {
+				e = false
+				continue
+			}
+
+			// only expect digits and decimals
+			if unicode.IsDigit(b) || b == '.' {
+				e = false
+				continue
+			}
+			
+			// anything else is a token end
+			break
+		}
+	} else if unicode.IsLetter(a()) {
+		for ok() && (unicode.IsLetter(b()) || unicode.IsNumber(b())) {
+			j++
+		}
+	}
+
+	t.text = string(t.buff[i:j])
+	t.buff = t.buff[j:]
+}
+
+func (t *toks) dump() string {
+	return t.text + string(t.buff)
 }
 
 /*
@@ -74,6 +123,12 @@ U := ([kKmMgGtTpP][iI]?)?[bB]
 
 */
 
+func (t *toks) expect(s string) {
+	if t.isEnd() {
+		fail("unexpected end of input - expected", s)
+	}
+}
+
 func (t *toks) exp() num {
 	t.expect("an expression")
 
@@ -86,7 +141,7 @@ func (t *toks) exp() num {
 	n := 0
 	var vs []num
 	var os []string
-	for !t.end() && t.head() != ")" {
+	for !t.isEnd() && t.head() != ")" {
 		o := t.op()
 		v := t.conv()
 
@@ -177,7 +232,7 @@ func (t *toks) op() string {
 		fail("unexpected token", x, "- expected operator")
 	}
 
-	t.step()
+	t.next()
 	return x
 }
 
@@ -186,15 +241,15 @@ func (t *toks) conv() num {
 
 	v := t.val()
 
-	if !t.end() && t.head() == "in" {
-		t.step()
+	if !t.isEnd() && t.head() == "in" {
+		t.next()
 
 		u := t.unit()
 		if v.unit == "" {
 			fail("cannot convert unitless number to", u)
 		}
 
-		v.val *= bits(v.unit)/bits(u)
+		v.val *= bits(v.unit) / bits(u)
 		v.unit = u
 	}
 
@@ -238,7 +293,7 @@ func (t *toks) num() float64 {
 		fail("unexpected token", x, "- expected a number")
 	}
 
-	t.step()
+	t.next()
 	return v
 }
 
@@ -250,12 +305,12 @@ func (t *toks) unit() string {
 		fail("unexpected token", x, "- expected a unit")
 	}
 
-	t.step()
+	t.next()
 	return x
 }
 
 func (t *toks) isUnit() bool {
-	if t.end() {
+	if t.isEnd() {
 		return false
 	}
 
@@ -305,7 +360,7 @@ func (t *toks) open() {
 		fail("unexpected token", x, "- expected open bracket")
 	}
 
-	t.step()
+	t.next()
 }
 
 func (t *toks) close() {
@@ -316,5 +371,5 @@ func (t *toks) close() {
 		fail("unexpected token", x, "- expected close bracket")
 	}
 
-	t.step()
+	t.next()
 }
