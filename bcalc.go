@@ -15,19 +15,10 @@ func main() {
 
 	v := t.exp()
 	if !t.isEnd() {
-		fail("malformed, couldn't parse " + t.dump())
+		t.fail("malformed, couldn't parse")
 	}
-	pass(v.String())
-}
 
-func pass(msg ...any) {
-	fmt.Println(msg...)
-	os.Exit(0)
-}
-
-func fail(msg ...any) {
-	fmt.Println(msg...)
-	os.Exit(1)
+	fmt.Println(v.String())
 }
 
 type num struct {
@@ -42,6 +33,7 @@ func (n num) String() string {
 type toks struct {
 	text string
 	buff []rune
+	n int
 }
 
 func (t *toks) isEnd() bool {
@@ -55,16 +47,16 @@ func (t *toks) head() string {
 func (t *toks) next() {
 	i := 0
 	j := 0
-	a := func() rune { return t.buff[i] }
-	b := func() rune { return t.buff[j] }
-	ok := func() bool { return j < len(t.buff) }
+	a := func() rune { return t.buff[t.n + i] }
+	b := func() rune { return t.buff[t.n + j] }
 
-	for i < len(t.buff) && unicode.IsSpace(a()) {
+	ok := func(x int) bool { return x + t.n < len(t.buff) }
+
+	for ok(i) && unicode.IsSpace(a()) {
 		i++
 	}
-	if i > len(t.buff)-1 {
+	if !ok(i) {
 		t.text = ""
-		t.buff = nil
 		return
 	}
 
@@ -74,7 +66,7 @@ func (t *toks) next() {
 
 	} else if unicode.IsDigit(a()) {
 		e := false
-		for ; ok(); j++ {
+		for ; ok(j); j++ {
 			b := b()
 
 			// e notation is allowed
@@ -99,17 +91,22 @@ func (t *toks) next() {
 			break
 		}
 	} else if unicode.IsLetter(a()) {
-		for ok() && (unicode.IsLetter(b()) || unicode.IsNumber(b())) {
+		for ok(j) && (unicode.IsLetter(b()) || unicode.IsNumber(b())) {
 			j++
 		}
 	}
 
-	t.text = string(t.buff[i:j])
-	t.buff = t.buff[j:]
+	t.text = string(t.buff[t.n+i:t.n+j])
+	t.n += j
 }
 
 func (t *toks) dump() string {
-	return t.text + string(t.buff)
+	s := fmt.Sprint("[", t.text, "] : ")
+	u := strings.Repeat(" ", len(s) + t.n - 1)
+	s += string(t.buff)
+	u += "^"
+
+	return fmt.Sprint(s, "\n", u)
 }
 
 /*
@@ -123,9 +120,15 @@ U := ([kKmMgGtTpP][iI]?)?[bB]
 
 */
 
+func (t *toks) fail(s... any) {
+	fmt.Println(s...)
+	fmt.Println(t.dump())
+	os.Exit(1)
+}
+
 func (t *toks) expect(s string) {
 	if t.isEnd() {
-		fail("unexpected end of input - expected", s)
+		t.fail("unexpected end of input - expected", s)
 	}
 }
 
@@ -146,25 +149,25 @@ func (t *toks) exp() num {
 		v := t.conv()
 
 		if div {
-			fail("ambiguous division - add parentheses")
+			t.fail("ambiguous division - add parentheses")
 		}
 
 		switch o {
 		case "/":
 			if addsub || mul {
-				fail("ambiguous division - add parentheses")
+				t.fail("ambiguous division - add parentheses")
 			}
 			div = true
 
 		case "*", "x":
 			if addsub {
-				fail("ambiguous multiplication - add parentheses")
+				t.fail("ambiguous multiplication - add parentheses")
 			}
 			mul = true
 
 		case "+", "-":
 			if mul {
-				fail("ambiguous addition/subtraction - add parentheses")
+				t.fail("ambiguous addition/subtraction - add parentheses")
 			}
 			addsub = true
 		}
@@ -183,21 +186,21 @@ func (t *toks) exp() num {
 		switch o {
 		case "+":
 			if (v.unit == "") != (u.unit == "") {
-				fail("cannot add values with and without units -", u)
+				t.fail("cannot add values with and without units -", u)
 			}
 
 			v.val += u.val * m
 
 		case "-":
 			if (v.unit == "") != (u.unit == "") {
-				fail("cannot subtract values with and without units")
+				t.fail("cannot subtract values with and without units")
 			}
 
 			v.val -= u.val * m
 
 		case "x", "*":
 			if v.unit != "" && u.unit != "" {
-				fail("cannot multiply two byte units")
+				t.fail("cannot multiply two byte units")
 			}
 
 			v.val *= u.val
@@ -207,7 +210,7 @@ func (t *toks) exp() num {
 
 		case "/":
 			if v.unit == "" && u.unit != "" {
-				fail("cannot divide a unitless number")
+				t.fail("cannot divide a unitless number")
 			}
 
 			v.val /= u.val
@@ -229,7 +232,7 @@ func (t *toks) op() string {
 	switch x {
 	case "+", "-", "x", "*", "/":
 	default:
-		fail("unexpected token", x, "- expected operator")
+		t.fail("unexpected token", x, "- expected operator")
 	}
 
 	t.next()
@@ -246,7 +249,7 @@ func (t *toks) conv() num {
 
 		u := t.unit()
 		if v.unit == "" {
-			fail("cannot convert unitless number to", u)
+			t.fail("cannot convert unitless number to", u)
 		}
 
 		v.val *= bits(v.unit) / bits(u)
@@ -290,7 +293,7 @@ func (t *toks) num() float64 {
 
 	v, err := strconv.ParseFloat(x, 64)
 	if err != nil {
-		fail("unexpected token", x, "- expected a number")
+		t.fail("unexpected token", x, "- expected a number")
 	}
 
 	t.next()
@@ -302,7 +305,7 @@ func (t *toks) unit() string {
 
 	x := t.head()
 	if !t.isUnit() {
-		fail("unexpected token", x, "- expected a unit")
+		t.fail("unexpected token", x, "- expected a unit")
 	}
 
 	t.next()
@@ -357,7 +360,7 @@ func (t *toks) open() {
 
 	x := t.head()
 	if x != "(" {
-		fail("unexpected token", x, "- expected open bracket")
+		t.fail("unexpected token", x, "- expected open bracket")
 	}
 
 	t.next()
@@ -368,7 +371,7 @@ func (t *toks) close() {
 
 	x := t.head()
 	if x != ")" {
-		fail("unexpected token", x, "- expected close bracket")
+		t.fail("unexpected token", x, "- expected close bracket")
 	}
 
 	t.next()
