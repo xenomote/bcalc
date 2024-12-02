@@ -181,7 +181,7 @@ func (t *toks) exp() num {
 		o := os[i]
 		u := vs[i]
 
-		m := bits(u.unit) / bits(v.unit)
+		m := bytes(u.unit) / bytes(v.unit)
 
 		switch o {
 		case "+":
@@ -252,7 +252,7 @@ func (t *toks) conv() num {
 			t.fail("cannot convert unitless number to", u)
 		}
 
-		v.val *= bits(v.unit) / bits(u)
+		v.val *= bytes(v.unit) / bytes(u)
 		v.unit = u
 	}
 
@@ -309,7 +309,7 @@ func (t *toks) unit() string {
 	}
 
 	t.next()
-	return x
+	return strings.ToLower(x)
 }
 
 func (t *toks) isUnit() bool {
@@ -327,9 +327,9 @@ func (t *toks) isUnit() bool {
 	return false
 }
 
-func bits(s string) float64 {
+func bytes(s string) float64 {
 	switch s {
-	case "b":
+	case "b", "":
 		return 1
 	case "kb":
 		return 1_000
@@ -352,7 +352,7 @@ func bits(s string) float64 {
 	case "pib":
 		return 1024 * 1024 * 1024 * 1024 * 1024
 	}
-	return 1
+	panic("bad unit")
 }
 
 func (t *toks) open() {
